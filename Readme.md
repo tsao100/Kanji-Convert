@@ -1,0 +1,1 @@
+Python code to convert font to symbol.cod, kandat.dat and kandat2.dat for the long rail app running in pc9801.
