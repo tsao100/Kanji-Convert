@@ -8,3 +8,4 @@ python make_symbol_cod.py
 
 via ttf:
 python ttf2symbol.py
+python ttf2kandat.py
