@@ -7,5 +7,6 @@ python make_kandat.py
 python make_symbol_cod.py 
 
 via ttf:
-python ttf2symbol.py
+python ttf2symbol.py <----this is the best.
 python ttf2kandat.py
+python linettf2kandat.py <----this is the best.

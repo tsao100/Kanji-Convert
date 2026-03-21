@@ -1,40 +1,40 @@
 #!/usr/bin/env python3
 """
-make_kandat.py
+ttf2kandat.py
 ==============
-MS Gothic TTC フォント → KANDAT.DAT + KANDAT2.DAT  (Shift-JIS 内符)
+MS Gothic TTC 字型 → KANDAT.DAT + KANDAT2.DAT  (Shift-JIS 內碼)
 
-fontTools でグリフ輪郭を抽出し、TrueType 二次ベジェ曲線を折れ線近似して
-KANDAT 形式の IP 値に変換する。
+以 fontTools 擷取字符輪廓，將 TrueType 二次貝茲曲線以折線近似，
+再轉換為 KANDAT 格式的 IP 值。
 
-BASIC コード KANJI2 サブルーチンからの逆算:
+從 BASIC 程式 KANJI2 副程式逆向推導：
 
 ┌─────────────────────────────────────────────────────────────────────┐
-│  KANDAT*.DAT フォーマット  (BASIC RANDOM ファイル, LEN=32)           │
+│  KANDAT*.DAT 格式  (BASIC RANDOM 檔案, LEN=32)                      │
 │                                                                     │
-│  Record  1 .. 8   : ヘッダー予約 (ゼロ埋め, 32 bytes × 8 = 256 B)  │
-│  Record  XYCODE+8 : キャラクターデータ                               │
-│    Word  0..14  (int16 × 15) : ストロークデータ (IP 値)              │
-│    Word  15     (int16 × 1 ) : チェーンポインター                    │
-│                                (次レコードのスロット番号, 0=終端)    │
+│  Record  1 .. 8   : 標頭保留區 (填零, 32 bytes × 8 = 256 B)         │
+│  Record  XYCODE+8 : 字符資料                                         │
+│    Word  0..14  (int16 × 15) : 筆畫資料 (IP 值)                     │
+│    Word  15     (int16 × 1 ) : 鏈結指標                              │
+│                                (下一個記錄的槽號, 0=結束)            │
 └─────────────────────────────────────────────────────────────────────┘
 
-IP 値エンコード:
+IP 值編碼：
   IP = pen_flag × 10000 + X × 100 + Y
   IPEN = INT(IP / 10000) + 1
-    pen_flag = 1 → IPEN = 2 → 描線 (draw)
-    pen_flag = 2 → IPEN = 3 → 移動 (pen up / new stroke)
-  X = (IP mod 10000) / 100   整数  0..32 (左→右)
-  Y = IP mod 100              整数  0..32 (下→上, TrueType Y 軸そのまま)
+    pen_flag = 1 → IPEN = 2 → 畫線 (draw)
+    pen_flag = 2 → IPEN = 3 → 移動 (pen up / 新筆畫)
+  X = (IP mod 10000) / 100   整數  0..32 (左→右)
+  Y = IP mod 100              整數  0..32 (下→上, TrueType Y 軸方向不變)
 
-KANDAT  ファイル割り当て (XYCODE ≤ 4000):
-  非漢字 (KTYPE 1)  スロット    1 ..  453
-  漢字一 (KTYPE 2)  スロット  454 .. 3461
-  特殊   (KTYPE 4)  スロット 3519 .. 3693
-  → 最大スロット = 3693
+KANDAT 檔案配置 (XYCODE ≤ 4000)：
+  非漢字 (KTYPE 1)  槽號    1 ..  453
+  第一水準漢字 (KTYPE 2)  槽號  454 .. 3461
+  特殊   (KTYPE 4)  槽號 3519 .. 3693
+  → 最大槽號 = 3693
 
-KANDAT2 ファイル割り当て (XYCODE > 4000, stored as XYCODE-4000):
-  漢字二 (KTYPE 3)  スロット    1 .. 3572
+KANDAT2 檔案配置 (XYCODE > 4000, 儲存為 XYCODE-4000)：
+  第二水準漢字 (KTYPE 3)  槽號    1 .. 3572
 """
 
 from __future__ import annotations
@@ -45,54 +45,54 @@ from fontTools.ttLib import TTFont
 from fontTools.pens.basePen import AbstractPen
 
 # ═══════════════════════════════════════════════════════════════════════
-# 定数
+# 常數
 # ═══════════════════════════════════════════════════════════════════════
 
-FONT_PATH   = r'msgothic.ttc'
-FONT_NUMBER = 2          # TTC 内インデックス: 0=MS Gothic, 1=MS PGothic, 2=MS UI Gothic
+FONT_PATH   = r'chogokubosogothic_5.ttf'
+FONT_NUMBER = 0          # TTC 內索引：0=MS Gothic, 1=MS PGothic, 2=MS UI Gothic
 OUTPUT1     = 'KANDAT.DAT'
 OUTPUT2     = 'KANDAT2.DAT'
 
-REC_SIZE   = 32     # bytes per record (BASIC LEN=32)
-INTS_PER   = 16     # int16 per record
-DATA_INTS  = 15     # data words per record (word 15 = chain ptr)
-GRID       = 32.0   # 座標グリッド 0..32
-MAX_RECS   = 8      # チェーン最大レコード数 (BASIC: NR < 8)
+REC_SIZE   = 32     # 每筆記錄位元組數 (BASIC LEN=32)
+INTS_PER   = 16     # 每筆記錄的 int16 數
+DATA_INTS  = 15     # 每筆記錄的資料字組數 (第 15 字組為鏈結指標)
+GRID       = 32.0   # 座標格線 0..32
+MAX_RECS   = 8      # 最大鏈結記錄數 (BASIC: NR < 8)
 
-MAX_SLOT1  = 3693   # KANDAT.DAT  プライマリスロット上限
-MAX_SLOT2  = 3572   # KANDAT2.DAT プライマリスロット上限
+MAX_SLOT1  = 3693   # KANDAT.DAT  主要槽號上限
+MAX_SLOT2  = 3572   # KANDAT2.DAT 主要槽號上限
 
-# BASIC ZKC 非漢字 JIS 範囲ペア
+# BASIC ZKC 非漢字 JIS 範圍對
 ZKC = [
-    0x2120, 0x217F,   # 記号・句読点
-    0x2220, 0x222F,   # 特殊記号
-    0x232F, 0x233A,   # 全角数字 0-9
-    0x2340, 0x235B,   # 全角大文字 A-Z
-    0x2360, 0x237B,   # 全角小文字 a-z
-    0x2420, 0x2474,   # ひらがな
-    0x2520, 0x2577,   # カタカナ
-    0x2620, 0x2639,   # ギリシャ大文字
-    0x2640, 0x2659,   # ギリシャ小文字
-    0x2720, 0x2742,   # キリル大文字
-    0x2750, 0x2772,   # キリル小文字
+    0x2120, 0x217F,   # 符號・標點
+    0x2220, 0x222F,   # 特殊符號
+    0x232F, 0x233A,   # 全形數字 0-9
+    0x2340, 0x235B,   # 全形大寫 A-Z
+    0x2360, 0x237B,   # 全形小寫 a-z
+    0x2420, 0x2474,   # 平假名
+    0x2520, 0x2577,   # 片假名
+    0x2620, 0x2639,   # 希臘大寫
+    0x2640, 0x2659,   # 希臘小寫
+    0x2720, 0x2742,   # 西里爾大寫
+    0x2750, 0x2772,   # 西里爾小寫
 ]
 
 # ═══════════════════════════════════════════════════════════════════════
-# JIS / Shift-JIS / Unicode 変換
+# JIS / Shift-JIS / Unicode 轉換
 # ═══════════════════════════════════════════════════════════════════════
 
 def mstojis(mscode: int) -> int:
-    """Shift-JIS (MS 符号) → JIS X 0208。BASIC MSTOJIS 関数の完全再現。"""
+    """Shift-JIS (MS 編碼) → JIS X 0208。完整重現 BASIC MSTOJIS 函式。"""
     il = mscode & 0xFF
     ih = (mscode >> 8) & 0xFF
-    # 第1バイト変換
+    # 第1位元組轉換
     if ih <= 159:
         ihh = 2 * (ih - 129) + 33
     else:
         ihh = 2 * (ih - 224) + 95
     if il >= 159:
         ihh += 1
-    # 第2バイト変換
+    # 第2位元組轉換
     if   64  <= il <= 126: ill = il - 31
     elif 128 <= il <= 158: ill = il - 32
     elif 159 <= il <= 252: ill = il - 126
@@ -102,11 +102,11 @@ def mstojis(mscode: int) -> int:
 
 
 def jistoxy(jiscode: int) -> int:
-    """JIS X 0208 → XYCODE (KANDAT スロット番号)。BASIC JISTOXY 関数の完全再現。"""
+    """JIS X 0208 → XYCODE (KANDAT 槽號)。完整重現 BASIC JISTOXY 函式。"""
     hcd = (jiscode >> 8) & 0xFF
     lcd = jiscode & 0xFF
 
-    # 優先度順に KTYPE 判定 (後勝ち, 範囲重複なし)
+    # 依優先順序判斷 KTYPE（後者優先，範圍不重疊）
     ktype = 0
     if 0x2120 < jiscode < 0x277E: ktype = 1
     if 0x30   <= hcd    <= 0x4F:  ktype = 2
@@ -114,7 +114,7 @@ def jistoxy(jiscode: int) -> int:
     if 0x7620 < jiscode < 0x76D0: ktype = 4
 
     if ktype == 1:
-        # 非漢字: ZKC 範囲ペアを順に走査
+        # 非漢字：依序掃描 ZKC 範圍對
         kcbase = 0
         for i in range(1, len(ZKC), 2):
             if ZKC[i-1] < jiscode < ZKC[i]:
@@ -135,14 +135,14 @@ def jistoxy(jiscode: int) -> int:
         return (hcd - 0x50) * 94 + (lcd - 0x20) + 4000
 
     elif ktype == 4:
-        # 追加漢字
+        # 附加漢字
         return jiscode - 0x7620 + 3518
 
     return 0
 
 
 def build_xycode_maps() -> tuple[dict, dict]:
-    """Shift-JIS 2バイト空間を全走査して XYCODE → Unicode マップを構築。
+    """掃描 Shift-JIS 雙位元組空間，建立 XYCODE → Unicode 對照表。
 
     Returns:
         map1 : KANDAT.DAT  用 {xycode: unicode_cp}  (xycode 1..MAX_SLOT1)
@@ -178,11 +178,11 @@ def build_xycode_maps() -> tuple[dict, dict]:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# ベジェ曲線サンプラー
+# 貝茲曲線取樣器
 # ═══════════════════════════════════════════════════════════════════════
 
 def _cubic(p0, p1, p2, p3, n=8):
-    """3次ベジェ曲線を n 点でサンプリング（終点含む）。"""
+    """對三次貝茲曲線取 n 個樣本點（含終點）。"""
     for k in range(1, n + 1):
         t = k / n; m = 1 - t
         yield (m**3*p0[0]+3*m**2*t*p1[0]+3*m*t**2*p2[0]+t**3*p3[0],
@@ -190,7 +190,7 @@ def _cubic(p0, p1, p2, p3, n=8):
 
 
 def _quadratic(p0, p1, p2, n=6):
-    """2次ベジェ曲線を n 点でサンプリング（終点含む）。"""
+    """對二次貝茲曲線取 n 個樣本點（含終點）。"""
     for k in range(1, n + 1):
         t = k / n; m = 1 - t
         yield (m**2*p0[0]+2*m*t*p1[0]+t**2*p2[0],
@@ -198,14 +198,14 @@ def _quadratic(p0, p1, p2, n=6):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# TrueType グリフ輪郭収集ペン
+# TrueType 字符輪廓收集筆
 # ═══════════════════════════════════════════════════════════════════════
 
 class CollectorPen(AbstractPen):
-    """fontTools AbstractPen 実装。グリフ輪郭を (x, y, pen_up) 点列として収集する。
+    """fontTools AbstractPen 實作。將字符輪廓收集為 (x, y, pen_up) 點列。
 
-    pen_up=True  : 移動 (新ストローク / 輪郭開始)
-    pen_up=False : 描線
+    pen_up=True  : 移動（新筆畫 / 輪廓起始）
+    pen_up=False : 畫線
     """
 
     def __init__(self):
@@ -213,32 +213,32 @@ class CollectorPen(AbstractPen):
         self._cx = self._cy = 0.0
 
     def moveTo(self, pt):
-        """輪郭開始点 (pen up)。"""
+        """輪廓起始點（pen up）。"""
         self._cx, self._cy = pt[0], pt[1]
         self.pts.append((pt[0], pt[1], True))
 
     def lineTo(self, pt):
-        """直線セグメント。"""
+        """直線段。"""
         self._cx, self._cy = pt[0], pt[1]
         self.pts.append((pt[0], pt[1], False))
 
     def qCurveTo(self, *points):
-        """TrueType 二次ベジェ (B-スプライン) セグメント。
+        """TrueType 二次貝茲（B-Spline）線段。
 
-        fontTools の規約: points の最後の要素がオンカーブ、それ以前がオフカーブ。
-        連続するオフカーブ点の間には暗黙のオンカーブ中点が存在する。
+        fontTools 慣例：points 最後一個元素為曲線上控制點，其餘為曲線外控制點。
+        連續曲線外控制點之間存在隱含的曲線上中間點。
         """
         off_pts = list(points[:-1])
         on_pt   = points[-1]
         seg_start = (self._cx, self._cy)
 
         if not off_pts:
-            # オフカーブなし → 直線扱い
+            # 無曲線外控制點 → 視為直線
             self.pts.append((on_pt[0], on_pt[1], False))
         else:
             for i, off in enumerate(off_pts):
                 if i < len(off_pts) - 1:
-                    # 連続オフカーブ → 暗黙オンカーブ中点を補間
+                    # 連續曲線外控制點 → 補插隱含曲線上中間點
                     next_off = off_pts[i + 1]
                     mid = ((off[0] + next_off[0]) / 2,
                            (off[1] + next_off[1]) / 2)
@@ -246,17 +246,17 @@ class CollectorPen(AbstractPen):
                         self.pts.append((px, py, False))
                     seg_start = mid
                 else:
-                    # 最後のオフカーブ + 終点オンカーブ
+                    # 最後一個曲線外控制點 + 終點曲線上控制點
                     for px, py in _quadratic(seg_start, off, on_pt):
                         self.pts.append((px, py, False))
 
         self._cx, self._cy = on_pt[0], on_pt[1]
 
     def curveTo(self, *points):
-        """3次ベジェセグメント (CFF/OTF フォント用, 念のため実装)。
+        """三次貝茲線段（供 CFF/OTF 字型使用，備用實作）。
 
-        fontTools の規約: points = (ctrl1, ctrl2, ..., end_pt)
-        ポリカーブの場合は 3点ずつに分割されて渡される。
+        fontTools 慣例：points = (ctrl1, ctrl2, ..., end_pt)
+        多段曲線時以每 3 點為一組傳入。
         """
         pts = [(self._cx, self._cy)] + [(p[0], p[1]) for p in points]
         i = 0
@@ -267,36 +267,36 @@ class CollectorPen(AbstractPen):
         self._cx, self._cy = points[-1][0], points[-1][1]
 
     def closePath(self):
-        """輪郭クローズ (TrueType は常にクローズド)。"""
+        """封閉輪廓（TrueType 輪廓均為封閉）。"""
         pass
 
     def endPath(self):
-        """オープン輪郭終端 (通常未使用)。"""
+        """開放輪廓終端（通常不使用）。"""
         pass
 
     def addComponent(self, glyphName, transformation):
-        """複合グリフ参照。glyph_set 経由で描画すると自動展開されるため不要。"""
+        """複合字符參照。透過 glyph_set 繪製時會自動展開，此處不需處理。"""
         pass
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# フォント読み込み & グリフ変換
+# 字型載入 & 字符轉換
 # ═══════════════════════════════════════════════════════════════════════
 
 def font_metrics(font) -> tuple[float, float, float]:
-    """フォントメトリクスを返す。(em_size, ascender, descender)
+    """取得字型度量值，傳回 (em_size, ascender, descender)。
 
-    descender は負値 (例: -200)。
-    OS/2 テーブルが利用可能な場合は sTypo 値を優先。
+    descender 為負值（例：-200）。
+    若 OS/2 表格可用則優先使用 sTypo 值。
     """
     em = float(font['head'].unitsPerEm)
     try:
         asc = float(font['OS/2'].sTypoAscender)
-        dsc = float(font['OS/2'].sTypoDescender)   # 負値
+        dsc = float(font['OS/2'].sTypoDescender)   # 負值
     except (AttributeError, KeyError):
         asc = float(font['hhea'].ascent)
-        dsc = float(font['hhea'].descent)           # 負値
-    # descender が 0 の場合はフォールバック
+        dsc = float(font['hhea'].descent)           # 負值
+    # descender 為 0 時使用備用值
     if dsc >= 0:
         dsc = -em * 0.2
     return em, asc, dsc
@@ -309,24 +309,24 @@ def process_glyph(
     asc: float,
     dsc: float,
 ) -> list[int]:
-    """TrueType グリフ → KANDAT IP 値リスト (塗りつぶし字形)。
+    """TrueType 字符 → KANDAT IP 值列表（填充字形）。
 
-    アルゴリズム:
-      1. CollectorPen でグリフ輪郭点列を収集し輪郭ごとに分割
-      2. 高解像度 (RENDER_SIZE×RENDER_SIZE) PIL イメージに各輪郭を
-         XOR 塗りつぶし描画 → 偶奇塗りつぶし則を実現
-         (TrueType の穴抜き文字「口・日・目」等に対応)
-      3. 33×33 グリッドにダウンサンプルして塗りつぶし領域を確定
-      4. 各グリッド行を走査し、塗りつぶし区間を水平ストロークに変換
-         (行頭 pen_up → 行末 pen_down)
+    演算法：
+      1. 以 CollectorPen 收集字符輪廓點列，並依輪廓分組
+      2. 在高解析度（RENDER_SIZE×RENDER_SIZE）PIL 影像上逐輪廓以
+         XOR 填充繪製，實現偶奇填充規則
+         （處理含孔字符，如「口・日・目」等）
+      3. 向下取樣為 33×33 格線以確定填充區域
+      4. 逐行掃描格線，將填充區間轉換為水平筆畫
+         （行頭 pen_up → 行尾 pen_down）
 
-    座標系:
-      TrueType: Y 上向き, 原点 = ベースライン左端
-      PIL      : Y 下向き (上辺 = ascender, 下辺 = descender)
-      KANDAT   : X 左→右 [0,32], Y 下→上 [0,32]
+    座標系：
+      TrueType：Y 向上，原點 = 基線左端
+      PIL      ：Y 向下（上緣 = ascender，下緣 = descender）
+      KANDAT   ：X 左→右 [0,32]，Y 下→上 [0,32]
     """
-    RENDER_SIZE = 128   # 中間レンダリング解像度
-    GRID_N      = 33    # グリッド点数 (0..32)
+    RENDER_SIZE = 128   # 中間渲染解析度
+    GRID_N      = 33    # 格線點數 (0..32)
 
     pen = CollectorPen()
     try:
@@ -338,10 +338,10 @@ def process_glyph(
         return []
 
     y_range  = asc - dsc   # > 0
-    y_offset = -dsc        # descender を 0 に (正値)
+    y_offset = -dsc        # 將 descender 移至 0（正值）
 
-    # ── 1. 輪郭分割 & PIL 座標へ変換 ────────────────────────────────────
-    # PIL Y: 上向きフォント座標を反転
+    # ── 1. 輪廓分組 & 轉換為 PIL 座標 ───────────────────────────────────
+    # PIL Y 向下，需反轉字型的 Y 上向座標
     contours: list[list[tuple[float, float]]] = []
     current:  list[tuple[float, float]] = []
 
@@ -360,8 +360,8 @@ def process_glyph(
     if not contours:
         return []
 
-    # ── 2. 偶奇則塗りつぶし (輪郭ごとに XOR) ────────────────────────────
-    # 外側輪郭と内側輪郭(穴)を正しく処理: 口・日・目 等の穴抜き文字に対応
+    # ── 2. 偶奇填充（逐輪廓 XOR）────────────────────────────────────────
+    # 正確處理外輪廓與內輪廓（孔）：適用於「口・日・目」等含孔字符
     buf = np.zeros((RENDER_SIZE, RENDER_SIZE), dtype=np.uint8)
     for contour in contours:
         if len(contour) < 3:
@@ -372,8 +372,8 @@ def process_glyph(
         )
         buf ^= np.array(mask, dtype=np.uint8)
 
-    # ── 3. 33×33 グリッドへダウンサンプル ────────────────────────────────
-    # 各グリッドセルに対応するブロックの過半数が塗られていれば塗りとみなす
+    # ── 3. 向下取樣為 33×33 格線 ────────────────────────────────────────
+    # 對應格線儲存格的像素區塊，若過半數為填充則視為填充
     grid = np.zeros((GRID_N, GRID_N), dtype=bool)
     for gy in range(GRID_N):
         r0 = round(gy       / (GRID_N - 1) * (RENDER_SIZE - 1))
@@ -386,12 +386,12 @@ def process_glyph(
             block = buf[r0:r1, c0:c1]
             grid[gy, gx] = block.sum() * 2 >= block.size
 
-    # ── 4. 水平スキャンライン → セグメントリスト ────────────────────────
-    # PIL row 0 = ascender 側 = KANDAT Y=32
-    # PIL row 32 = descender 側 = KANDAT Y=0
+    # ── 4. 水平掃描線 → 線段列表 ────────────────────────────────────────
+    # PIL 第 0 行 = ascender 側 = KANDAT Y=32
+    # PIL 第 32 行 = descender 側 = KANDAT Y=0
     #
-    # 行内に不連続領域がある字（口・日・間・算 等）は複数セグメントに分割し、
-    # 穴の中を誤って塗り潰さないようにする。
+    # 行內有不連續區域的字（口・日・間・算等）分割為多段，
+    # 避免將孔的內側誤填。
     all_segs: list[tuple[int, int, int]] = []   # (y_kandat, x_start, x_end)
 
     for row in range(GRID_N):
@@ -400,12 +400,12 @@ def process_glyph(
         if len(filled) == 0:
             continue
 
-        # 連続ピクセル塊ごとにセグメントを生成
+        # 依連續像素塊產生各線段
         seg_start = int(filled[0])
         prev      = int(filled[0])
         for idx in range(1, len(filled)):
             cur = int(filled[idx])
-            if cur > prev + 1:          # 不連続 → セグメント確定
+            if cur > prev + 1:          # 不連續 → 確定一段
                 all_segs.append((y_kandat, seg_start, prev))
                 seg_start = cur
             prev = cur
@@ -414,31 +414,30 @@ def process_glyph(
     if not all_segs:
         return []
 
-    # ── 5. IP 上限 (119) に合わせて均等間引き ────────────────────────────
-    # 単純な末尾切り捨てではなく均等サンプリングにより、
-    # 字の上部・中部・下部を均等に保持する。
+    # ── 5. 依 IP 上限 (119) 進行均等抽樣 ────────────────────────────────
+    # 不採用簡單末尾截斷，改以均等抽樣保留字的上、中、下各部分
     MAX_IPS  = MAX_RECS * DATA_INTS - 1   # 119
-    max_segs = MAX_IPS // 2               # 各セグメント = IP 2 個
+    max_segs = MAX_IPS // 2               # 每段 = 2 個 IP 值
 
     if len(all_segs) > max_segs:
         step     = len(all_segs) / max_segs
         all_segs = [all_segs[round(i * step)] for i in range(max_segs)]
 
-    # ── 6. IP 値エンコード ────────────────────────────────────────────────
+    # ── 6. IP 值編碼 ─────────────────────────────────────────────────────
     ips: list[int] = []
     for y_kandat, x_start, x_end in all_segs:
-        ips.append(2 * 10000 + x_start * 100 + y_kandat)  # pen up (移動)
-        ips.append(1 * 10000 + x_end   * 100 + y_kandat)  # pen down (描線)
+        ips.append(2 * 10000 + x_start * 100 + y_kandat)  # pen up（移動）
+        ips.append(1 * 10000 + x_end   * 100 + y_kandat)  # pen down（畫線）
 
     return ips
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 座標変換 & IP エンコーディング  (変更なし)
+# 座標轉換 & IP 編碼
 # ═══════════════════════════════════════════════════════════════════════
 
 def deduplicate(pts: list) -> list:
-    """連続する同一グリッド点を除去（pen_up 点は位置関係なく保持）。"""
+    """移除連續重複的格線點（pen_up 點無論位置均保留）。"""
     out = []; prev = None
     for x, y, pu in pts:
         key = (round(x), round(y))
@@ -450,8 +449,8 @@ def deduplicate(pts: list) -> list:
 
 
 def to_ip_values(pts: list) -> list[int]:
-    """グリッド座標列 → KANDAT IP 値リスト。
-    pen_flag=2 (IPEN=3, 移動), pen_flag=1 (IPEN=2, 描線)
+    """格線座標列 → KANDAT IP 值列表。
+    pen_flag=2 (IPEN=3, 移動), pen_flag=1 (IPEN=2, 畫線)
     IP = pen_flag×10000 + X×100 + Y
     """
     ips = []
@@ -464,39 +463,39 @@ def to_ip_values(pts: list) -> list[int]:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# レコードパッキング  (変更なし)
+# 記錄封裝
 # ═══════════════════════════════════════════════════════════════════════
 
 def pack_to_records(ip_values: list[int]) -> list[list[int]]:
-    """IP 値リストを 16-int レコードリスト (チェーン=0 初期化) に変換。
+    """將 IP 值列表轉換為 16-int 記錄列表（鏈結指標初始化為 0）。
 
-    レコード構造:
-      Word 0..14 : データ (最初レコードの Word 0 = NPKAN カウント)
-      Word 15    : チェーンポインター (スロット番号, 0=終端)
+    記錄結構：
+      Word 0..14 : 資料（首筆記錄 Word 0 = NPKAN 計數）
+      Word 15    : 鏈結指標（槽號，0=結束）
 
-    最大 8 レコードチェーン: count(1) + 14 + 7×15 = 120 語 → IP 最大 119 個。
+    最大 8 筆記錄鏈：count(1) + 14 + 7×15 = 120 字組 → 最多 119 個 IP。
     """
     max_pts = MAX_RECS * DATA_INTS - 1   # 8×15-1 = 119
     if len(ip_values) > max_pts:
         ip_values = ip_values[:max_pts]
 
-    # データストリーム: [count, ip1, ip2, ...]
+    # 資料串流：[count, ip1, ip2, ...]
     stream = [len(ip_values)] + ip_values
 
     records = []
     for i in range(0, len(stream), DATA_INTS):
         chunk = stream[i : i + DATA_INTS]
-        chunk += [0] * (DATA_INTS - len(chunk))  # パディング
-        records.append(chunk + [0])               # chain=0 (後で設定)
+        chunk += [0] * (DATA_INTS - len(chunk))  # 填補
+        records.append(chunk + [0])               # chain=0（稍後設定）
 
     if not records:
-        records = [[0] * INTS_PER]   # 空文字: count=0 のみ
+        records = [[0] * INTS_PER]   # 空字符：僅 count=0
 
     return records
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# KANDAT バイナリ生成
+# KANDAT 二進位生成
 # ═══════════════════════════════════════════════════════════════════════
 
 def build_kandat_bytes(
@@ -507,32 +506,32 @@ def build_kandat_bytes(
     verbose    : bool,
     label      : str,
 ) -> bytes:
-    """KANDAT バイナリデータを生成して返す。
+    """生成並傳回 KANDAT 二進位資料。
 
     Args:
         xycode_map  : {slot_index: unicode_cp}
-        font_path   : TTC/TTF フォントパス
-        font_number : TTC 内フォントインデックス
-        max_primary : プライマリスロット最大値
-        verbose     : 詳細ログ表示
-        label       : ログ用ラベル
+        font_path   : TTC/TTF 字型路徑
+        font_number : TTC 內字型索引
+        max_primary : 主要槽號上限
+        verbose     : 顯示詳細記錄
+        label       : 記錄用標籤
 
     Returns:
-        bytes: KANDAT ファイルバイナリ
+        bytes: KANDAT 檔案二進位內容
     """
-    # ── フォント読み込み ──────────────────────────────────────────────────
+    # ── 載入字型 ─────────────────────────────────────────────────────────
     print(f'\n{"═"*60}')
-    print(f'  [{label}]  プライマリスロット上限: {max_primary}')
-    print(f'  フォント読み込み中: {font_path} [#{font_number}] ...')
+    print(f'  [{label}]  主要槽號上限：{max_primary}')
+    print(f'  載入字型中：{font_path} [#{font_number}] ...')
     font      = TTFont(font_path, fontNumber=font_number)
     em, asc, dsc = font_metrics(font)
     cmap      = font.getBestCmap() or {}
     glyph_set = font.getGlyphSet()
     print(f'  em={em:.0f}  ascender={asc:.0f}  descender={dsc:.0f}  '
-          f'グリフ数={len(glyph_set)}')
+          f'字符數={len(glyph_set)}')
     print(f'{"═"*60}')
 
-    # ── Step 1: 各スロットの IP 値を生成 ─────────────────────────────────
+    # ── Step 1：產生各槽的 IP 值 ─────────────────────────────────────────
     ip_by_slot: dict[int, list[int]] = {}
     found = missing = empty = 0
 
@@ -558,9 +557,9 @@ def build_kandat_bytes(
 
         ip_by_slot[slot] = ips
 
-    # ── Step 2: レコードパッキング & チェーンスロット割り当て ─────────────
+    # ── Step 2：記錄封裝 & 鏈結槽號配置 ────────────────────────────────
     flat: dict[int, list[int]] = {}   # slot → record (16 ints)
-    next_extra = max_primary + 1      # 継続レコード用スロット番号開始位置
+    next_extra = max_primary + 1      # 延續記錄槽號起始位置
 
     for slot in range(1, max_primary + 1):
         records = pack_to_records(ip_by_slot.get(slot, []))
@@ -580,8 +579,8 @@ def build_kandat_bytes(
             for s, r in zip(all_slots, records):
                 flat[s] = r
 
-    # ── Step 3: バイト配列生成 ────────────────────────────────────────────
-    # BASIC: RECNO = XYCODE + 8  →  file_offset = (RECNO-1)*32 = (slot+7)*32
+    # ── Step 3：產生位元組陣列 ───────────────────────────────────────────
+    # BASIC：RECNO = XYCODE + 8  →  file_offset = (RECNO-1)*32 = (slot+7)*32
     max_slot  = max(flat.keys()) if flat else max_primary
     file_size = (max_slot + 8) * REC_SIZE
     buf       = bytearray(file_size)
@@ -592,73 +591,73 @@ def build_kandat_bytes(
             struct.pack_into('<h', buf, offset + j * 2, val)
 
     n_cont = next_extra - max_primary - 1
-    print(f'\n  グリフあり  : {found:5d}')
-    print(f'  グリフなし  : {missing:5d}  (Unicode マップなし: {empty})')
-    print(f'  継続レコード: {n_cont:5d}')
-    print(f'  最大スロット: {max_slot:5d}')
-    print(f'  ファイルサイズ: {len(buf):,} bytes ({len(buf)//1024} KB)')
+    print(f'\n  有字符    ：{found:5d}')
+    print(f'  無字符    ：{missing:5d}  (無 Unicode 對照：{empty})')
+    print(f'  延續記錄  ：{n_cont:5d}')
+    print(f'  最大槽號  ：{max_slot:5d}')
+    print(f'  檔案大小  ：{len(buf):,} bytes ({len(buf)//1024} KB)')
     return bytes(buf)
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# エントリーポイント
+# 程式進入點
 # ═══════════════════════════════════════════════════════════════════════
 
 def main():
     parser = argparse.ArgumentParser(
-        description='MS Gothic TTC フォント → KANDAT.DAT + KANDAT2.DAT'
+        description='MS Gothic TTC 字型 → KANDAT.DAT + KANDAT2.DAT'
     )
     parser.add_argument(
         '--font', default=FONT_PATH,
-        help=f'TTC/TTF フォントパス (デフォルト: {FONT_PATH})'
+        help=f'TTC/TTF 字型路徑（預設：{FONT_PATH}）'
     )
     parser.add_argument(
         '--font-number', type=int, default=FONT_NUMBER,
-        help=f'TTC 内フォントインデックス (デフォルト: {FONT_NUMBER}  '
-             f'0=MS Gothic / 1=MS PGothic / 2=MS UI Gothic)'
+        help=f'TTC 內字型索引（預設：{FONT_NUMBER}  '
+             f'0=MS Gothic / 1=MS PGothic / 2=MS UI Gothic）'
     )
     parser.add_argument(
         '--out1', default=OUTPUT1,
-        help=f'KANDAT.DAT 出力パス (デフォルト: {OUTPUT1})'
+        help=f'KANDAT.DAT 輸出路徑（預設：{OUTPUT1}）'
     )
     parser.add_argument(
         '--out2', default=OUTPUT2,
-        help=f'KANDAT2.DAT 出力パス (デフォルト: {OUTPUT2})'
+        help=f'KANDAT2.DAT 輸出路徑（預設：{OUTPUT2}）'
     )
     parser.add_argument(
         '--verbose', '-v', action='store_true',
-        help='各文字の処理詳細を表示'
+        help='顯示每個字符的處理詳情'
     )
     args = parser.parse_args()
 
-    print('MS Gothic TTC → KANDAT ジェネレーター')
-    print(f'  フォント        : {args.font} [#{args.font_number}]')
-    print(f'  KANDAT.DAT  出力 : {args.out1}')
-    print(f'  KANDAT2.DAT 出力 : {args.out2}')
+    print('MS Gothic TTC → KANDAT 產生器')
+    print(f'  字型          ：{args.font} [#{args.font_number}]')
+    print(f'  KANDAT.DAT 輸出：{args.out1}')
+    print(f'  KANDAT2.DAT輸出：{args.out2}')
 
-    # ── Shift-JIS → XYCODE → Unicode マップを構築 ────────────────────────
-    print('\nShift-JIS コード空間をスキャン中...')
+    # ── 建立 Shift-JIS → XYCODE → Unicode 對照表 ─────────────────────
+    print('\n掃描 Shift-JIS 編碼空間中...')
     map1, map2 = build_xycode_maps()
-    print(f'  KANDAT.DAT  マップ: {len(map1)} エントリ')
-    print(f'  KANDAT2.DAT マップ: {len(map2)} エントリ')
+    print(f'  KANDAT.DAT  對照表：{len(map1)} 筆')
+    print(f'  KANDAT2.DAT 對照表：{len(map2)} 筆')
 
-    # ── KANDAT.DAT 生成 ───────────────────────────────────────────────────
+    # ── 產生 KANDAT.DAT ──────────────────────────────────────────────
     dat1 = build_kandat_bytes(
         map1, args.font, args.font_number, MAX_SLOT1, args.verbose, 'KANDAT.DAT'
     )
     with open(args.out1, 'wb') as f:
         f.write(dat1)
-    print(f'\n  → {args.out1} 書き込み完了')
+    print(f'\n  → {args.out1} 寫入完成')
 
-    # ── KANDAT2.DAT 生成 ──────────────────────────────────────────────────
+    # ── 產生 KANDAT2.DAT ─────────────────────────────────────────────
     dat2 = build_kandat_bytes(
         map2, args.font, args.font_number, MAX_SLOT2, args.verbose, 'KANDAT2.DAT'
     )
     with open(args.out2, 'wb') as f:
         f.write(dat2)
-    print(f'  → {args.out2} 書き込み完了')
+    print(f'  → {args.out2} 寫入完成')
 
-    print('\n完了。')
+    print('\n完成。')
 
 
 if __name__ == '__main__':
