@@ -7,9 +7,10 @@ python make_kandat.py
 python make_symbol_cod.py 
 
 via ttf:
-python ttf2symbol.py <----this is the best.
+python ttf2symbol.py <----this is ok.
 python ttf2kandat.py
 python linettf2kandat.py <----this is ok.
 
 via shx:
 python shx2kandat.py <----this is the best.
+python shx2symbol.py <----this is the best.

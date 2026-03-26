@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-make_symbol_cod_ttf.py
+ttf2symbol.py
 ======================
 TTF フォントファイル → SYMBOL.COD  (QB45 BASIC 用ベクタフォント)
 

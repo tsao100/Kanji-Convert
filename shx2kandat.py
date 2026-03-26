@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-make_kandat.py — AutoCAD SHX BigFont → KANDAT.DAT + KANDAT2.DAT
+shx2kandat.py — AutoCAD SHX BigFont → KANDAT.DAT + KANDAT2.DAT
 ================================================================
 修正版 v6：子形狀 (CALL 0x07) 實作真正的不等比例縮放
   ─ render_shape 新增獨立的 scx / scy 參數
